@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>MiniHax</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+html,body{margin:0;height:100%;background:#1a212d;color:#fff;font-family:system-ui,sans-serif;overflow:hidden;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+.scr{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#1a212d;padding:12px;text-align:center;overflow:auto}
+.hide{display:none!important}
+button,input{font:inherit;border-radius:10px;border:0;padding:11px 16px;font-size:16px}
+button{background:#e56e56;color:#fff;font-weight:700}
+button.b{background:#5689e5}button.g{background:#444c5c}
+input{background:#2c3646;color:#fff;text-align:center;width:200px}
+.row{display:flex;gap:8px;flex-wrap:wrap;justify-content:center}
+.cols{display:flex;gap:10px;width:100%;max-width:520px}
+.col{flex:1;background:#232c3a;border-radius:12px;padding:8px;min-height:90px}
+.col h3{margin:2px 0 6px}
+#hud{position:fixed;top:4px;left:0;right:0;text-align:center;font-weight:700;font-size:18px;pointer-events:none;text-shadow:0 1px 3px #000}
+#msg{position:fixed;top:38%;left:0;right:0;text-align:center;font-size:34px;font-weight:800;pointer-events:none;text-shadow:0 2px 6px #000}
+#kick{position:fixed;right:max(24px,env(safe-area-inset-right));bottom:24px;width:96px;height:96px;border-radius:50%;background:#ffffff33;border:3px solid #fff;padding:0}
+#back{position:fixed;bottom:16px;left:50%;transform:translateX(-50%)}
+#rot{display:none;z-index:9}
+@media (orientation:portrait){#rot{display:flex}}
+</style></head><body>
+<canvas id="cv"></canvas><div id="hud"></div><div id="msg"></div>
+<button id="kick" class="hide">PATEAR</button>
+<button id="back" class="hide g">Volver a la sala</button>
+<div id="menu" class="scr"><h1>MiniHax</h1>
+<input id="nm" placeholder="Tu nombre" maxlength="10">
+<button id="mk">Crear sala</button>
+<div class="row"><input id="cd" placeholder="Código" maxlength="4" style="width:120px"><button id="jn" class="b">Unirse</button></div></div>
+<div id="lobby" class="scr hide"><h2>Sala <span id="code"></span></h2>
+<div class="cols"><div class="col"><h3 style="color:#e56e56">Rojo</h3><div id="cr"></div></div><div class="col"><h3 style="color:#5689e5">Azul</h3><div id="cb"></div></div></div>
+<div class="col" style="width:100%;max-width:520px;min-height:0"><b>Espectadores:</b> <span id="cs"></span></div>
+<div class="row"><button data-t="r">Rojo</button><button data-t="b" class="b">Azul</button><button data-t="s" class="g">Espectar</button></div>
+<div class="row"><button id="cp" class="g">Copiar link</button><button id="go" class="hide">Empezar</button></div></div>
+<div id="rot" class="scr">Girá el celular en horizontal</div>
+<script>
+const W=840,H=400,PR=15,BR=10,G1=140,G2=260,TIME=180,$=id=>document.getElementById(id);
+const POSTS=[[0,G1],[0,G2],[W,G1],[W,G2]].map(([x,y])=>({x,y,vx:0,vy:0}));
+let peer,conns=[],hostConn,isHost=false,myId='',code='',joined=false,G;
+let S={ph:'lobby',p:[],b:[W/2,H/2],sc:[0,0],t:TIME,msg:''},R={},RB={x:W/2,y:H/2};
+const r1=v=>Math.round(v*10)/10;
+try{$('nm').value=localStorage.nm||''}catch(e){}
+if(location.hash)$('cd').value=location.hash.slice(1).toUpperCase();
+const nm=()=>{const n=$('nm').value.trim()||'Jugador';try{localStorage.nm=n}catch(e){}return n};
+
+/* ---------- HOST: física ---------- */
+function addP(id,n){const c=t=>Object.values(G.pl).filter(p=>p.tm==t).length;
+ const tm=c('r')<=c('b')?(c('r')<5?'r':'s'):(c('b')<5?'b':'s');
+ G.pl[id]={n:n.slice(0,10),tm,x:0,y:0,vx:0,vy:0,in:{x:0,y:0,k:0},cd:0}}
+function setTeam(id,t){const p=G.pl[id];if(!p||!'rbs'.includes(t)||p.tm==t)return;
+ if(t!='s'&&Object.values(G.pl).filter(q=>q.tm==t).length>=5)return;p.tm=t}
+function resetPos(){const n={r:0,b:0},P=Object.values(G.pl);
+ for(const p of P){if(p.tm=='s')continue;const i=n[p.tm]++,tot=P.filter(q=>q.tm==p.tm).length;
+  p.x=W/2+(p.tm=='r'?-1:1)*(70+(i%2)*60);p.y=H*(i+1)/(tot+1);p.vx=p.vy=0}
+ G.ball={x:W/2,y:H/2,vx:0,vy:0}}
+function col(a,ra,ia,b,rb,ib){let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy),m=ra+rb;
+ if(d>=m||d==0)return;dx/=d;dy/=d;const o=m-d,s=ia+ib;
+ a.x-=dx*o*ia/s;a.y-=dy*o*ia/s;b.x+=dx*o*ib/s;b.y+=dy*o*ib/s;
+ const rv=(b.vx-a.vx)*dx+(b.vy-a.vy)*dy;
+ if(rv<0){const j=-1.5*rv/s;a.vx-=j*ia*dx;a.vy-=j*ia*dy;b.vx+=j*ib*dx;b.vy+=j*ib*dy}}
+function step(){
+ if(G.ph=='goal'){if(--G.gt<=0){resetPos();G.ph='play';G.msg=''}return}
+ if(G.ph!='play')return;
+ G.t-=1/60;
+ if(G.t<=0){G.t=0;G.ph='end';G.msg=G.sc[0]>G.sc[1]?'¡Gana Rojo!':G.sc[1]>G.sc[0]?'¡Gana Azul!':'Empate';return}
+ const B=G.ball,A=Object.values(G.pl).filter(p=>p.tm!='s');
+ for(const p of A){let {x:ix,y:iy}=p.in,l=Math.hypot(ix,iy);if(l>1){ix/=l;iy/=l}
+  const a=p.in.k?.07:.1;p.vx+=ix*a;p.vy+=iy*a;p.x+=p.vx;p.y+=p.vy;p.vx*=.96;p.vy*=.96;
+  if(p.x<PR){p.x=PR;p.vx*=-.3}if(p.x>W-PR){p.x=W-PR;p.vx*=-.3}
+  if(p.y<PR){p.y=PR;p.vy*=-.3}if(p.y>H-PR){p.y=H-PR;p.vy*=-.3}
+  if(p.cd>0)p.cd--;
+  const dx=B.x-p.x,dy=B.y-p.y,d=Math.hypot(dx,dy)||1;
+  if(p.in.k&&!p.cd&&d<PR+BR+4){B.vx+=dx/d*5;B.vy+=dy/d*5;p.cd=8}}
+ for(let i=0;i<A.length;i++)for(let j=i+1;j<A.length;j++)col(A[i],PR,.5,A[j],PR,.5);
+ B.x+=B.vx;B.y+=B.vy;B.vx*=.99;B.vy*=.99;
+ for(const q of A)col(q,PR,.5,B,BR,1);
+ for(const q of POSTS)col(q,5,0,B,BR,1);
+ if(B.y<BR){B.y=BR;B.vy*=-.6}if(B.y>H-BR){B.y=H-BR;B.vy*=-.6}
+ if(!(B.y>G1&&B.y<G2)){if(B.x<BR){B.x=BR;B.vx*=-.6}if(B.x>W-BR){B.x=W-BR;B.vx*=-.6}}
+ if(B.x<-BR||B.x>W+BR){const w=B.x<0?1:0;G.sc[w]++;G.ph='goal';G.gt=120;G.msg='¡GOL de '+(w?'Azul':'Rojo')+'!'}}
+function bcast(){const s={ph:G.ph,t:Math.ceil(G.t),sc:G.sc,msg:G.msg,b:[r1(G.ball.x),r1(G.ball.y)],
+ p:Object.entries(G.pl).map(([id,p])=>[id,p.n,p.tm,r1(p.x),r1(p.y),p.in.k?1:0])};
+ apply(s);conns.forEach(c=>c.open&&c.send(s))}
+
+/* ---------- Red (PeerJS) ---------- */
+function hostRoom(){code=Math.random().toString(36).slice(2,6).toUpperCase();
+ peer=new Peer('hxb-'+code);
+ peer.on('error',e=>e.type=='unavailable-id'?hostRoom():alert('Error: '+e.type));
+ peer.on('open',()=>{isHost=true;myId='host';joined=true;
+  G={ph:'lobby',pl:{},ball:{x:W/2,y:H/2,vx:0,vy:0},sc:[0,0],t:TIME,msg:''};addP('host',nm());
+  try{navigator.wakeLock.request('screen')}catch(e){}bcast()});
+ peer.on('connection',c=>{conns.push(c);
+  c.on('data',m=>{const p=G.pl[c.peer];
+   if(m.t=='join'&&!p)addP(c.peer,String(m.n||'Jugador'));
+   else if(m.t=='in'&&p)p.in={x:+m.x||0,y:+m.y||0,k:m.k?1:0};
+   else if(m.t=='team')setTeam(c.peer,m.v)});
+  c.on('close',()=>{delete G.pl[c.peer];conns=conns.filter(x=>x!=c)})})}
+function joinRoom(c){code=c;peer=new Peer();
+ peer.on('error',e=>alert('No se pudo conectar: '+e.type));
+ peer.on('open',id=>{myId=id;hostConn=peer.connect('hxb-'+c);
+  setTimeout(()=>{if(!joined)alert('No se encontró la sala '+c)},9000);
+  hostConn.on('open',()=>{joined=true;hostConn.send({t:'join',n:nm()});setInterval(sendIn,33)});
+  hostConn.on('data',apply);
+  hostConn.on('close',()=>{alert('Se cayó el host');location.reload()})})}
+function sendIn(){if(hostConn&&hostConn.open)hostConn.send({t:'in',...myInput()})}
+
+/* ---------- Estado / UI ---------- */
+function apply(s){S=s;
+ $('hud').textContent=joined&&s.ph!='lobby'?`Rojo ${s.sc[0]} - ${s.sc[1]} Azul   ${Math.floor(s.t/60)}:${String(s.t%60).padStart(2,'0')}`:'';
+ $('msg').textContent=s.msg;
+ const lob=s.ph=='lobby';$('menu').classList.toggle('hide',joined);$('lobby').classList.toggle('hide',!joined||!lob);
+ $('kick').classList.toggle('hide',!joined||lob);$('back').classList.toggle('hide',!(isHost&&s.ph=='end'));
+ $('go').classList.toggle('hide',!isHost);$('code').textContent=code;
+ if(lob){const f=(id,t)=>{$(id).innerHTML='';s.p.filter(p=>p[2]==t).forEach(p=>{const d=document.createElement('div');d.textContent=p[1]+(p[0]==myId?' (vos)':'');$(id).append(d)})};
+  f('cr','r');f('cb','b');f('cs','s')}}
+$('mk').onclick=()=>{nm();hostRoom()};
+$('jn').onclick=()=>{const c=$('cd').value.trim().toUpperCase();c?joinRoom(c):alert('Poné el código')};
+$('cp').onclick=()=>{const u=location.origin+location.pathname+'#'+code;navigator.clipboard&&navigator.clipboard.writeText(u);$('cp').textContent='¡Copiado!'};
+document.querySelectorAll('[data-t]').forEach(b=>b.onclick=()=>isHost?setTeam('host',b.dataset.t):hostConn.send({t:'team',v:b.dataset.t}));
+$('go').onclick=()=>{G.ph='play';G.sc=[0,0];G.t=TIME;G.msg='';resetPos()};
+$('back').onclick=()=>{G.ph='lobby';G.msg=''};
+
+/* ---------- Controles ---------- */
+let jx=0,jy=0,kk=0,sid=null,so=null,sp=null;const keys={},cv=$('cv'),cx=cv.getContext('2d');
+const K=(...a)=>a.some(k=>keys[k])?1:0;
+function myInput(){return{x:jx+K('ArrowRight','d')-K('ArrowLeft','a'),y:jy+K('ArrowDown','s')-K('ArrowUp','w'),k:kk||K(' ','x','Shift')}}
+cv.onpointerdown=e=>{if(e.clientX<innerWidth*.6&&sid==null){sid=e.pointerId;so=[e.clientX,e.clientY];sp=so}};
+cv.onpointermove=e=>{if(e.pointerId!=sid)return;sp=[e.clientX,e.clientY];jx=(sp[0]-so[0])/45;jy=(sp[1]-so[1])/45;const l=Math.hypot(jx,jy);if(l>1){jx/=l;jy/=l}};
+cv.onpointerup=cv.onpointercancel=e=>{if(e.pointerId==sid){sid=null;jx=jy=0;so=null}};
+$('kick').onpointerdown=()=>kk=1;$('kick').onpointerup=$('kick').onpointercancel=()=>kk=0;
+onkeydown=e=>keys[e.key]=1;onkeyup=e=>keys[e.key]=0;
+document.addEventListener('contextmenu',e=>e.preventDefault());
+
+/* ---------- Dibujo + bucle ---------- */
+const dpr=Math.min(devicePixelRatio||1,2);
+function fit(){cv.width=innerWidth*dpr;cv.height=innerHeight*dpr}onresize=fit;fit();
+const TC={r:'#e56e56',b:'#5689e5'};
+function draw(){
+ cx.setTransform(1,0,0,1,0,0);cx.fillStyle='#1a212d';cx.fillRect(0,0,cv.width,cv.height);
+ if(!joined)return;
+ const s=Math.min(innerWidth/(W+80),(innerHeight-30)/(H+10)),ox=(innerWidth-W*s)/2,oy=30+(innerHeight-30-H*s)/2;
+ cx.setTransform(s*dpr,0,0,s*dpr,ox*dpr,oy*dpr);
+ cx.fillStyle='#6f8f58';cx.fillRect(0,0,W,H);cx.fillStyle='#55704a';cx.fillRect(-30,G1,30,G2-G1);cx.fillRect(W,G1,30,G2-G1);
+ cx.strokeStyle='#d5ecc9';cx.lineWidth=3;cx.strokeRect(0,0,W,H);
+ cx.beginPath();cx.moveTo(W/2,0);cx.lineTo(W/2,H);cx.stroke();cx.beginPath();cx.arc(W/2,H/2,70,0,7);cx.stroke();
+ POSTS.forEach((q,i)=>{cx.fillStyle=i<2?TC.r:TC.b;cx.beginPath();cx.arc(q.x,q.y,5,0,7);cx.fill()});
+ const f=isHost?1:.5;cx.textAlign='center';cx.font='bold 12px system-ui';
+ for(const p of S.p){if(p[2]=='s')continue;const r=R[p[0]]||(R[p[0]]={x:p[3],y:p[4]});r.x+=(p[3]-r.x)*f;r.y+=(p[4]-r.y)*f;
+  cx.fillStyle=TC[p[2]];cx.strokeStyle=p[5]?'#fff':'#000';cx.lineWidth=p[5]?4:2.5;
+  cx.beginPath();cx.arc(r.x,r.y,PR,0,7);cx.fill();cx.stroke();
+  cx.fillStyle=p[0]==myId?'#ffe066':'#fff';cx.fillText(p[1],r.x,r.y-PR-4)}
+ RB.x+=(S.b[0]-RB.x)*f;RB.y+=(S.b[1]-RB.y)*f;
+ cx.fillStyle='#fff';cx.strokeStyle='#000';cx.lineWidth=2;cx.beginPath();cx.arc(RB.x,RB.y,BR,0,7);cx.fill();cx.stroke();
+ if(so){cx.setTransform(dpr,0,0,dpr,0,0);cx.strokeStyle='#fff8';cx.lineWidth=3;cx.beginPath();cx.arc(so[0],so[1],45,0,7);cx.stroke();
+  cx.fillStyle='#fff6';cx.beginPath();cx.arc(so[0]+jx*45,so[1]+jy*45,20,0,7);cx.fill()}}
+let last=performance.now(),acc=0,tick=0;
+(function loop(now){requestAnimationFrame(loop);
+ if(isHost&&G){acc+=Math.min(now-last,100);G.pl.host.in=myInput();
+  while(acc>=1000/60){acc-=1000/60;step();if(++tick%2==0)bcast()}}
+ last=now;draw()})(last);
+</script></body></html>
